@@ -36,14 +36,11 @@ python src/per_participant_eeg.py \
 It prints macro-F1 for each participant and the mean, and writes
 `results/per_participant_eeg.csv`.
 
-## Colab and private GitHub access
+## Colab
 
-The repository is private. In Colab, authorize GitHub private-repository access
-when opening the notebook. Before running its setup cell, add a Colab Secret named
-`GITHUB_TOKEN`, enable notebook access for it, and use a fine-grained GitHub token
-limited to this repository with **Contents: Read-only** permission. The setup cell
-uses the secret only for cloning and immediately restores a credential-free remote
-URL. It does not print or save the token in the notebook.
+Open either notebook directly in Colab and run its setup cell. The public repository
+is cloned without a token or GitHub authorization, and the experiment data and
+results remain in Google Drive.
 
 ## Version 2 diagnostics
 
