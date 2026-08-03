@@ -1,4 +1,4 @@
-# teco-eeg-nlp
+# reproduce-teco-results
 
 EEG-based binary sentiment classification on the Persian TeCo dataset (task 1).
 
@@ -36,16 +36,14 @@ python src/per_participant_eeg.py \
 It prints macro-F1 for each participant and the mean, and writes
 `results/per_participant_eeg.csv`.
 
-## Colab
+## Colab and private GitHub access
 
-```
-!git clone <repo-url>
-%cd teco-eeg-nlp
-!pip install -r requirements.txt
-from google.colab import drive; drive.mount('/content/drive')
-```
-
-then open `run.ipynb` and point the prompts at the folders on your Drive.
+The repository is private. In Colab, authorize GitHub private-repository access
+when opening the notebook. Before running its setup cell, add a Colab Secret named
+`GITHUB_TOKEN`, enable notebook access for it, and use a fine-grained GitHub token
+limited to this repository with **Contents: Read-only** permission. The setup cell
+uses the secret only for cloning and immediately restores a credential-free remote
+URL. It does not print or save the token in the notebook.
 
 ## Version 2 diagnostics
 
