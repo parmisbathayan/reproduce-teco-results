@@ -47,7 +47,26 @@ from google.colab import drive; drive.mount('/content/drive')
 
 then open `run.ipynb` and point the prompts at the folders on your Drive.
 
+## Version 2 diagnostics
+
+`notebooks/02_v2_diagnoseCollapse.ipynb` is the instrumented follow-up to the
+single-seed reproduction. It uses the locked settings in
+`configs/v2_diagnoseCollapse.json` and runs five seeds across all 12 held-out
+participants. It preserves the v1 model and split behavior while saving:
+
+- fold metrics, confusion matrices, predictions, and class probabilities;
+- epoch histories with validation macro-F1;
+- participant, channel, and train/test distribution statistics;
+- environment, Git revision, and data fingerprints;
+- summaries by participant and seed, including one-class collapse counts.
+
+The runner is crash-safe at the fold level and resumes completed seed/participant
+pairs from `fold_metrics.csv`. Its default Drive output is
+`Thesis/Results/reproduce_yaser_codes/eegonly/v2_diagnoseCollapse`.
+
 ## Notes
 
-Folds are tiny (~22 test sentences), so the per-participant numbers move around
-a bit between runs; compare the mean. `--seed` fixes the split and init.
+Each fold tests 110 sentences from one held-out participant. The training remains
+stochastic, so compare the per-participant distribution, collapse rate, and mean
+across predeclared seeds rather than relying on one run. `--seed` fixes the v1
+split and initialization.

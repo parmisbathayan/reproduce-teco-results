@@ -1,0 +1,12 @@
+{
+  "version": "v2_diagnoseCollapse",
+  "seeds": [42, 45, 52, 62, 72],
+  "epochs": 100,
+  "batch_size": 64,
+  "validation_split": 0.15,
+  "learning_rate": 0.001,
+  "early_stopping_patience": 40,
+  "early_stopping_start_epoch": 10,
+  "deterministic_ops": true,
+  "collapse_definition": "number of unique predicted classes == 1"
+}

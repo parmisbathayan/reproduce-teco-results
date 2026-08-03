@@ -57,7 +57,7 @@ def load_eeg(trt_dir):
     return eeg, text
 
 
-def build_binary_dataset(trt_dir, labels_csv):
+def build_binary_dataset(trt_dir, labels_csv, return_sentence_ids=False):
     """Positive vs negative sentences (neutral dropped -> 110 sentences)."""
     labels = load_labels(labels_csv)
     label_of = dict(zip(labels["key"], labels["sentiment_label"]))
@@ -73,4 +73,6 @@ def build_binary_dataset(trt_dir, labels_csv):
     X = eeg[:, keep]
     y = (sentiment[keep] == 1).astype(int)                # negative -> 0, positive -> 1
     codes = [c for _, c in PARTICIPANTS]
+    if return_sentence_ids:
+        return X, y, codes, keep + 1                     # TeCo sentenceId is 1-based
     return X, y, codes
