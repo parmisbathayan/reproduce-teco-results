@@ -19,6 +19,7 @@ from followup_common import (
 MODELS = (
     "majority", "logistic_mean_coverage", "logistic_coverage_only",
     "logistic_shuffled_sentence_labels", "small_mlp", "small_cnn",
+    "original_cnn_shuffled_sentence_labels",
 )
 
 
@@ -42,15 +43,20 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
     import tensorflow as tf
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
+    from model import build_cnn
 
     source_dir = os.path.dirname(__file__)
     X, y, codes, sentence_ids = prepare(
         config, trt_dir, labels_csv, out_dir, config_path,
         [__file__, os.path.join(source_dir, "followup_common.py"),
-         os.path.join(source_dir, "data.py")],
+         os.path.join(source_dir, "data.py"),
+         os.path.join(source_dir, "model.py")],
     )
     metrics_path = os.path.join(out_dir, "fold_metrics.csv")
-    expected = len(MODELS) * len(config["seeds"]) * len(codes)
+    expected = (
+        (len(MODELS) - 1) * len(config["seeds"]) * len(codes)
+        + len(config["v5_shuffled_cnn_seeds"]) * len(codes)
+    )
     if os.path.exists(metrics_path):
         completed = set(map(tuple, pd.read_csv(metrics_path)[
             ["model", "seed", "participant"]
@@ -83,13 +89,16 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
             n_channels = X.shape[-1]
 
             for name in MODELS:
+                if (name == "original_cnn_shuffled_sentence_labels"
+                        and seed not in config["v5_shuffled_cnn_seeds"]):
+                    continue
                 key = (name, str(seed), held_out)
                 if key in completed:
                     continue
                 started = time.perf_counter()
                 chosen = {}
                 history = None
-                target_y = shuffled_y if name == "logistic_shuffled_sentence_labels" else y
+                target_y = shuffled_y if "shuffled_sentence_labels" in name else y
                 if name == "majority":
                     majority = int(np.mean(y_fit) > 0.5)
                     probabilities = np.zeros((len(y), 2), dtype=np.float32)
@@ -130,7 +139,7 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                         model, features_fit, y_fit, features_val, y_val, config
                     )
                     probabilities = model.predict(features_test, verbose=0)
-                else:
+                elif name == "small_cnn":
                     tf.keras.backend.clear_session()
                     set_seed(seed, config["deterministic_ops"])
                     model = build_small_cnn(
@@ -139,6 +148,17 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                     n_parameters = int(model.count_params())
                     model, history, chosen = fit_network(
                         model, x_fit[..., None], y_fit, x_val[..., None], y_val, config
+                    )
+                    probabilities = model.predict(x_test[..., None], verbose=0)
+                else:
+                    tf.keras.backend.clear_session()
+                    set_seed(seed, config["deterministic_ops"])
+                    model = build_cnn(x_fit.shape[1:] + (1,), lr=0.001)
+                    n_parameters = int(model.count_params())
+                    shuffled_fit = np.tile(shuffled_y, len(fit_codes))
+                    model, history, chosen = fit_network(
+                        model, x_fit[..., None], shuffled_fit,
+                        x_val[..., None], shuffled_y, config
                     )
                     probabilities = model.predict(x_test[..., None], verbose=0)
 
@@ -156,13 +176,13 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                 )
                 row = {
                     **identifiers,
-                    "target_type": "shuffled_sentence_labels" if name ==
-                    "logistic_shuffled_sentence_labels" else "sentiment",
-                    "sentence_label_mapping_sha256": mapping_hash if name ==
-                    "logistic_shuffled_sentence_labels" else "",
+                    "target_type": "shuffled_sentence_labels" if
+                    "shuffled_sentence_labels" in name else "sentiment",
+                    "sentence_label_mapping_sha256": mapping_hash if
+                    "shuffled_sentence_labels" in name else "",
                     "representation": "coverage_only" if name ==
                     "logistic_coverage_only" else (
-                        "raw_word_channel_array" if name == "small_cnn"
+                        "raw_word_channel_array" if "cnn" in name
                         else "nonzero_word_mean_plus_coverage"
                     ),
                     "validation_participant": validation,

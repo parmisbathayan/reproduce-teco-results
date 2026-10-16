@@ -115,6 +115,92 @@ def run_probe(X, y, codes, sentence_ids, config, out_dir):
     return pd.DataFrame(rows)
 
 
+def run_ablation(X, y, codes, sentence_ids, config, out_dir):
+    """Small factorial contrast to separate validation split and checkpoint metric.
+
+    V2 supplies the legacy tail+accuracy reference. This adds the other three
+    combinations for two fixed participants and two fixed seeds. The
+    subject+macro-F1 rows are also part of the full V4 comparison, not rerun.
+    """
+    import tensorflow as tf
+    from model import build_cnn
+
+    ablation_path = os.path.join(out_dir, "ablation_metrics.csv")
+    full_path = os.path.join(out_dir, "fold_metrics.csv")
+    conditions = (
+        ("tail_val_macro_f1", "tail", "val_macro_f1"),
+        ("subject_val_accuracy", "subject", "val_accuracy"),
+        ("subject_val_macro_f1_lr_0.001", "subject", "val_macro_f1"),
+    )
+    for held_out in config["v4_ablation_participants"]:
+        for seed in config["v4_ablation_seeds"]:
+            for condition, split, monitor in conditions:
+                output_path = full_path if condition.startswith("subject_val_macro_f1") else ablation_path
+                if os.path.exists(output_path):
+                    old = pd.read_csv(output_path)
+                    if ((old.condition == condition) & (old.seed == seed)
+                            & (old.participant == held_out)).any():
+                        continue
+                tf.keras.backend.clear_session()
+                set_seed(seed, config["deterministic_ops"])
+                if split == "tail":
+                    test_index = codes.index(held_out)
+                    x_train = np.concatenate([
+                        X[index] for index in range(len(codes)) if index != test_index
+                    ])
+                    y_train = np.tile(y, len(codes) - 1)
+                    cut = int(len(x_train) * 0.85)
+                    x_fit, x_val = x_train[:cut], x_train[cut:]
+                    y_fit, y_val = y_train[:cut], y_train[cut:]
+                    validation = "mixed_contiguous_tail"
+                    fit_codes = [code for code in codes if code != held_out]
+                else:
+                    validation = next_validation(codes, held_out)
+                    x_fit, y_fit, x_val, y_val, fit_codes, _ = participant_split(
+                        X, y, codes, held_out, validation
+                    )
+                model = build_cnn(x_fit.shape[1:] + (1,), lr=0.001)
+                started = time.perf_counter()
+                model, history, chosen = fit_network(
+                    model, x_fit[..., None], y_fit, x_val[..., None], y_val,
+                    config, monitor=monitor,
+                )
+                seconds = time.perf_counter() - started
+                probabilities = model.predict(X[codes.index(held_out)][..., None], verbose=0)
+                identifiers = {
+                    "condition": condition, "seed": seed, "participant": held_out,
+                }
+                stem = f"{condition}_seed_{seed}_{held_out}"
+                directory = out_dir if output_path == full_path else os.path.join(out_dir, "ablation")
+                atomic_csv(
+                    history.assign(**identifiers),
+                    os.path.join(directory, "histories", stem + ".csv"),
+                )
+                save_predictions(
+                    os.path.join(directory, "predictions", stem + ".csv"),
+                    y, sentence_ids, probabilities, identifiers,
+                )
+                row = {
+                    **identifiers,
+                    "validation_split_type": split,
+                    "checkpoint_metric": monitor,
+                    "learning_rate": 0.001,
+                    "validation_participant": validation,
+                    "fit_participants": ",".join(fit_codes),
+                    "n_fit": len(x_fit), "n_validation": len(x_val),
+                    "n_test": len(y), "duration_seconds": seconds,
+                    **chosen, **macro_metrics(y, probabilities),
+                }
+                frame, _ = append_row(
+                    output_path, row, ["condition", "seed", "participant"]
+                )
+                print(
+                    f"V4 ablation {len(frame)} {condition} seed={seed} {held_out} "
+                    f"F1={row['macro_f1']:.3f} collapse={row['collapsed']}", flush=True,
+                )
+    return pd.read_csv(ablation_path)
+
+
 def run_full(X, y, codes, sentence_ids, config, out_dir):
     import tensorflow as tf
     from model import build_cnn
@@ -159,6 +245,8 @@ def run_full(X, y, codes, sentence_ids, config, out_dir):
                 )
                 row = {
                     **identifiers, "learning_rate": lr,
+                    "validation_split_type": "subject",
+                    "checkpoint_metric": "val_macro_f1",
                     "validation_participant": validation,
                     "fit_participants": ",".join(fit_codes),
                     "n_fit": len(x_fit), "n_validation": len(x_val),
@@ -187,7 +275,7 @@ def main():
     parser.add_argument("--labels-csv", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--config", default="configs/v4_v6_followup.json")
-    parser.add_argument("--stage", choices=["probe", "full", "both"], default="probe")
+    parser.add_argument("--stage", choices=["probe", "ablation", "full", "all"], default="probe")
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as stream:
         config = json.load(stream)
@@ -197,9 +285,11 @@ def main():
         [__file__, os.path.join(source_dir, "followup_common.py"),
          os.path.join(source_dir, "model.py"), os.path.join(source_dir, "data.py")],
     )
-    if args.stage in ("probe", "both"):
+    if args.stage in ("probe", "all"):
         run_probe(X, y, codes, sentence_ids, config, os.path.join(args.out_dir, "probe"))
-    if args.stage in ("full", "both"):
+    if args.stage in ("ablation", "all"):
+        run_ablation(X, y, codes, sentence_ids, config, args.out_dir)
+    if args.stage in ("full", "all"):
         run_full(X, y, codes, sentence_ids, config, args.out_dir)
 
 
