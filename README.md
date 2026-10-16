@@ -59,6 +59,26 @@ The runner is crash-safe at the fold level and resumes completed seed/participan
 pairs from `fold_metrics.csv`. Its default Drive output is
 `Thesis/Results/reproduce_yaser_codes/eegonly/v2_diagnoseCollapse`.
 
+Version 2 completed all 60 folds on 2026-09-03. It produced mean macro-F1 0.6018
+(fold SD 0.1404) with 10 one-class collapses. Nine collapses occurred at seed 45;
+three of five seeds had no collapse. The 50 folds that learned averaged 0.6555, so
+the result primarily indicates initialization-sensitive optimization rather than a
+fixed set of unusable participants.
+
+## Version 3 preprocessing ablations
+
+`notebooks/03_v3_preprocessing.ipynb` runs the locked configuration in
+`configs/v3_preprocessing.json`. It compares raw input, `log1p`, nonzero per-channel
+z-scoring, and nonzero robust clipping/IQR scaling across the same five seeds and
+12 participants (240 folds).
+
+All fitted statistics use only the fit partition. Validation and held-out participant
+data are transformed with frozen fit statistics, and padding/missing-fixation zeros
+remain zero. V3 deliberately retains v2's CNN, validation tail, learning rate, and
+accuracy-based early stopping so preprocessing is the only experimental change.
+Results are saved after every fold to the default Drive folder
+`Thesis/Results/reproduce_yaser_codes/eegonly/v3_preprocessing` and safely resume.
+
 ## Notes
 
 Each fold tests 110 sentences from one held-out participant. The training remains

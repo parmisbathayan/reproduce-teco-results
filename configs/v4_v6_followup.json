@@ -1,0 +1,23 @@
+{
+  "version": "v4_v6_followup",
+  "seeds": [42, 45, 52, 62, 72],
+  "epochs": 100,
+  "batch_size": 64,
+  "patience": 40,
+  "start_epoch": 10,
+  "require_gpu": true,
+  "deterministic_ops": true,
+  "v4_learning_rates": [0.001, 0.0003, 0.0001],
+  "v4_probe_participant": "JAY",
+  "v4_probe_seeds": [45, 62],
+  "v5_logistic_c": 1.0,
+  "v5_mlp_learning_rate": 0.001,
+  "v5_small_cnn_learning_rate": 0.001,
+  "v6_pairs": [
+    ["AMB", "JAY"],
+    ["FAS", "ARM"],
+    ["MEB", "NAD"],
+    ["SAS", "RAS"],
+    ["SHU", "EIA"]
+  ]
+}
