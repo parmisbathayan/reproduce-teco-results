@@ -39,8 +39,11 @@ def activation_gradient_probe(model, x, y):
         }
         for layer, value in zip(relu_layers, activations)
     }
+    # Inference-mode gradients avoid consuming dropout RNG before the legacy
+    # replay fit. They diagnose the fixed batch, not the exact stochastic
+    # gradient used by the optimizer during training.
     with tf.GradientTape() as tape:
-        probability = model(x_tensor, training=True)
+        probability = model(x_tensor, training=False)
         loss = tf.reduce_mean(tf.keras.losses.categorical_crossentropy(y_tensor, probability))
     gradients = tape.gradient(loss, model.trainable_variables)
     gradient_norms = {
