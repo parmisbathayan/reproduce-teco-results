@@ -1,0 +1,18 @@
+{
+  "version": "v3_preprocessing",
+  "preprocessing_methods": ["raw", "log1p", "per_channel_zscore", "robust_scale_clip"],
+  "seeds": [42, 45],
+  "epochs": 100,
+  "batch_size": 64,
+  "validation_split": 0.15,
+  "learning_rate": 0.001,
+  "early_stopping_patience": 40,
+  "early_stopping_start_epoch": 10,
+  "deterministic_ops": true,
+  "require_gpu": true,
+  "preserve_zero_padding": true,
+  "robust_clip_quantiles": [0.01, 0.99],
+  "robust_scale_quantiles": [0.25, 0.75],
+  "scale_epsilon": 1e-06,
+  "collapse_definition": "number of unique predicted classes == 1"
+}
