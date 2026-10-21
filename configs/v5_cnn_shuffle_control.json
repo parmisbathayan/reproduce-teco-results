@@ -1,0 +1,13 @@
+{
+  "version": "v5_cnn_shuffle_control",
+  "seeds": [45, 62],
+  "models": ["original_cnn_shuffled_sentence_labels"],
+  "v5_shuffled_cnn_seeds": [45, 62],
+  "v5_shuffled_cnn_learning_rate": 0.0001,
+  "epochs": 100,
+  "batch_size": 64,
+  "patience": 40,
+  "start_epoch": 10,
+  "deterministic_ops": true,
+  "require_gpu": true
+}

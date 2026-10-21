@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import time
 
@@ -13,6 +14,7 @@ from followup_common import (
     aggregate_words, append_row, atomic_csv, atomic_json, build_small_cnn, fit_network,
     macro_metrics, next_validation, participant_split, prepare,
     save_predictions, set_seed,
+    sha256,
 )
 
 
@@ -40,6 +42,43 @@ def model_plan(config):
     return models, schedule
 
 
+def neural_learning_rate(name, config):
+    keys = {
+        "small_mlp": "v5_mlp_learning_rate",
+        "small_cnn": "v5_small_cnn_learning_rate",
+        "original_cnn_shuffled_sentence_labels": "v5_shuffled_cnn_learning_rate",
+    }
+    if name not in keys:
+        return None
+    value = float(config.get(keys[name], 0.001))
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("Neural learning rates must be positive and finite.")
+    return value
+
+
+def validate_cnn_control_reference(reference, current):
+    old, new = reference["definition"], current["definition"]
+    if new["config"].get("models") != ["original_cnn_shuffled_sentence_labels"]:
+        raise ValueError("Matched CNN reference verification applies to the CNN shuffle-only stage.")
+    if old["config"].get("preprocessing") != "raw":
+        raise ValueError("The real-label CNN reference must use raw input.")
+    if old["config"].get("learning_rate") != neural_learning_rate("original_cnn_shuffled_sentence_labels", new["config"]):
+        raise ValueError("Real and shuffled CNN learning rates differ.")
+    for key in ("seeds", "epochs", "batch_size", "patience", "start_epoch", "deterministic_ops"):
+        if old["config"].get(key) != new["config"].get(key):
+            raise ValueError(f"Real and shuffled CNN training settings differ: {key}")
+    if old["data_files"] != new["data_files"]:
+        raise ValueError("Real and shuffled CNN data fingerprints differ.")
+    required = {"model.py", "data.py", "followup_common.py"}
+    old_sources = {row["name"]: row for row in old["source_files"] if row["name"] in required}
+    new_sources = {row["name"]: row for row in new["source_files"] if row["name"] in required}
+    if set(old_sources) != required or old_sources != new_sources:
+        raise ValueError("Real and shuffled CNN architecture, data, or training code differs.")
+    for key in ("tensorflow", "numpy", "pandas", "scikit_learn"):
+        if not reference.get(key) or reference.get(key) != current.get(key):
+            raise ValueError(f"Real and shuffled CNN runtimes differ: {key}")
+
+
 def build_mlp(n_features, lr):
     import tensorflow as tf
 
@@ -56,7 +95,7 @@ def build_mlp(n_features, lr):
     return model
 
 
-def run(config, trt_dir, labels_csv, out_dir, config_path):
+def run(config, trt_dir, labels_csv, out_dir, config_path, reference_out_dir=None):
     import tensorflow as tf
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
@@ -71,6 +110,27 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
          os.path.join(source_dir, "data.py"),
          os.path.join(source_dir, "model.py")],
     )
+    if reference_out_dir is not None:
+        import sklearn
+        if os.path.realpath(reference_out_dir) == os.path.realpath(out_dir):
+            raise ValueError("The real CNN reference must have a separate output folder.")
+        reference_path = os.path.join(reference_out_dir, "run_metadata.json")
+        with open(reference_path, encoding="utf-8") as stream:
+            reference = json.load(stream)
+        with open(os.path.join(out_dir, "run_metadata.json"), encoding="utf-8") as stream:
+            current = json.load(stream)
+        actual_runtime = {"tensorflow": tf.__version__, "numpy": np.__version__,
+                          "pandas": pd.__version__, "scikit_learn": sklearn.__version__}
+        if any(current.get(key) != value for key, value in actual_runtime.items()):
+            raise ValueError("Runtime changed since this shuffle-control run began.")
+        validate_cnn_control_reference(reference, current)
+        atomic_json({
+            "reference_directory": reference_out_dir,
+            "reference_metadata_sha256": sha256(reference_path),
+            "reference_git_commit": reference.get("git_commit"),
+            "matched": "Same raw data, model/training code, runtime, seeds, learning rate, epochs, validation, and checkpoint rule; sentence-label mapping is shuffled.",
+        }, os.path.join(out_dir, "matched_reference.json"))
+        print("Real-label CNN reference verified before training.", flush=True)
     metrics_path = os.path.join(out_dir, "fold_metrics.csv")
     expected = sum(len(schedule[name]) * len(codes) for name in models)
     print(f"V5 plan: {len(models)} models, {expected} saved result rows expected.", flush=True)
@@ -112,6 +172,9 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                 if key in completed:
                     continue
                 started = time.perf_counter()
+                learning_rate = neural_learning_rate(name, config)
+                if learning_rate is not None:
+                    print(f"START V5 {len(completed) + 1}/{expected}: {name}, seed={seed}, participant={held_out}. A fit may take 1–3 minutes.", flush=True)
                 chosen = {}
                 history = None
                 target_y = shuffled_y if "shuffled_sentence_labels" in name else y
@@ -148,7 +211,7 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                     features_val = scaler.transform(val_features).astype(np.float32)
                     features_test = scaler.transform(test_features).astype(np.float32)
                     model = build_mlp(
-                        features_fit.shape[-1], config["v5_mlp_learning_rate"]
+                        features_fit.shape[-1], learning_rate
                     )
                     n_parameters = int(model.count_params())
                     model, history, chosen = fit_network(
@@ -159,7 +222,7 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                     tf.keras.backend.clear_session()
                     set_seed(seed, config["deterministic_ops"])
                     model = build_small_cnn(
-                        x_fit.shape[1:] + (1,), config["v5_small_cnn_learning_rate"]
+                        x_fit.shape[1:] + (1,), learning_rate
                     )
                     n_parameters = int(model.count_params())
                     model, history, chosen = fit_network(
@@ -169,7 +232,7 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                 else:
                     tf.keras.backend.clear_session()
                     set_seed(seed, config["deterministic_ops"])
-                    model = build_cnn(x_fit.shape[1:] + (1,), lr=0.001)
+                    model = build_cnn(x_fit.shape[1:] + (1,), lr=learning_rate)
                     n_parameters = int(model.count_params())
                     shuffled_fit = np.tile(shuffled_y, len(fit_codes))
                     model, history, chosen = fit_network(
@@ -192,6 +255,7 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                 )
                 row = {
                     **identifiers,
+                    "learning_rate": learning_rate,
                     "target_type": "shuffled_sentence_labels" if
                     "shuffled_sentence_labels" in name else "sentiment",
                     "sentence_label_mapping_sha256": mapping_hash if
@@ -239,10 +303,11 @@ def main():
     parser.add_argument("--labels-csv", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--config", default="configs/v4_v6_followup.json")
+    parser.add_argument("--reference-out-dir")
     args = parser.parse_args()
     with open(args.config, encoding="utf-8") as stream:
         config = json.load(stream)
-    run(config, args.trt_dir, args.labels_csv, args.out_dir, args.config)
+    run(config, args.trt_dir, args.labels_csv, args.out_dir, args.config, args.reference_out_dir)
 
 
 if __name__ == "__main__":
