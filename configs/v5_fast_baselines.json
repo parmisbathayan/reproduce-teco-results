@@ -1,0 +1,13 @@
+{
+  "version": "v5_fast_baselines",
+  "seeds": [45, 62],
+  "models": [
+    "majority",
+    "logistic_mean_coverage",
+    "logistic_coverage_only",
+    "logistic_shuffled_sentence_labels"
+  ],
+  "v5_logistic_c": 1.0,
+  "deterministic_ops": true,
+  "require_gpu": false
+}

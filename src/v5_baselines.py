@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from followup_common import (
-    aggregate_words, append_row, atomic_csv, build_small_cnn, fit_network,
+    aggregate_words, append_row, atomic_csv, atomic_json, build_small_cnn, fit_network,
     macro_metrics, next_validation, participant_split, prepare,
     save_predictions, set_seed,
 )
@@ -21,6 +21,23 @@ MODELS = (
     "logistic_shuffled_sentence_labels", "small_mlp", "small_cnn",
     "original_cnn_shuffled_sentence_labels",
 )
+
+
+def model_plan(config):
+    models = list(config.get("models", MODELS))
+    seeds = list(config["seeds"])
+    if not models or len(models) != len(set(models)) or set(models) - set(MODELS):
+        raise ValueError("models must be a nonempty, unique list of supported models.")
+    if not seeds or len(seeds) != len(set(seeds)):
+        raise ValueError("seeds must be a nonempty unique list.")
+    schedule = {name: seeds for name in models}
+    if "original_cnn_shuffled_sentence_labels" in models:
+        control_seeds = list(config.get("v5_shuffled_cnn_seeds", []))
+        if (not control_seeds or len(control_seeds) != len(set(control_seeds))
+                or not set(control_seeds).issubset(seeds)):
+            raise ValueError("CNN shuffle-control seeds must be a unique nonempty subset of seeds.")
+        schedule["original_cnn_shuffled_sentence_labels"] = control_seeds
+    return models, schedule
 
 
 def build_mlp(n_features, lr):
@@ -45,7 +62,9 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
     from sklearn.preprocessing import StandardScaler
     from model import build_cnn
 
+    models, schedule = model_plan(config)
     source_dir = os.path.dirname(__file__)
+    print("V5: loading data and checking the recorded run definition...", flush=True)
     X, y, codes, sentence_ids = prepare(
         config, trt_dir, labels_csv, out_dir, config_path,
         [__file__, os.path.join(source_dir, "followup_common.py"),
@@ -53,10 +72,8 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
          os.path.join(source_dir, "model.py")],
     )
     metrics_path = os.path.join(out_dir, "fold_metrics.csv")
-    expected = (
-        (len(MODELS) - 1) * len(config["seeds"]) * len(codes)
-        + len(config["v5_shuffled_cnn_seeds"]) * len(codes)
-    )
+    expected = sum(len(schedule[name]) * len(codes) for name in models)
+    print(f"V5 plan: {len(models)} models, {expected} saved result rows expected.", flush=True)
     if os.path.exists(metrics_path):
         completed = set(map(tuple, pd.read_csv(metrics_path)[
             ["model", "seed", "participant"]
@@ -88,9 +105,8 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
             test_features = aggregate_words(x_test)
             n_channels = X.shape[-1]
 
-            for name in MODELS:
-                if (name == "original_cnn_shuffled_sentence_labels"
-                        and seed not in config["v5_shuffled_cnn_seeds"]):
+            for name in models:
+                if seed not in schedule[name]:
                     continue
                 key = (name, str(seed), held_out)
                 if key in completed:
@@ -180,11 +196,11 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                     "shuffled_sentence_labels" in name else "sentiment",
                     "sentence_label_mapping_sha256": mapping_hash if
                     "shuffled_sentence_labels" in name else "",
-                    "representation": "coverage_only" if name ==
-                    "logistic_coverage_only" else (
+                    "representation": "class_frequency_only" if name == "majority" else (
+                        "coverage_only" if name == "logistic_coverage_only" else (
                         "raw_word_channel_array" if "cnn" in name
                         else "nonzero_word_mean_plus_coverage"
-                    ),
+                    )),
                     "validation_participant": validation,
                     "fit_participants": ",".join(fit_codes),
                     "n_fit": len(y_fit), "n_validation": len(y_val),
@@ -199,6 +215,16 @@ def run(config, trt_dir, labels_csv, out_dir, config_path):
                     collapse_count=("collapsed", "sum"),
                 )
                 atomic_csv(summary, os.path.join(out_dir, "summary_by_model.csv"))
+                seed_summary = frame.groupby(["model", "target_type", "seed"], as_index=False).agg(
+                    folds=("macro_f1", "size"), mean_macro_f1=("macro_f1", "mean"),
+                    collapse_count=("collapsed", "sum"),
+                )
+                atomic_csv(seed_summary, os.path.join(out_dir, "summary_by_model_seed.csv"))
+                atomic_json({
+                    "completed_rows": len(frame), "expected_rows": expected,
+                    "complete": bool(len(frame) == expected), "models": models,
+                    "seeds": config["seeds"],
+                }, os.path.join(out_dir, "completion.json"))
                 completed.add(key)
                 print(
                     f"V5 {len(frame)}/{expected} {name} seed={seed} {held_out} "
