@@ -1,0 +1,17 @@
+{
+  "version": "v8_seen_readers_unseen_sentences",
+  "reader_protocol": "all_12_readers_in_fit_validation_test",
+  "conditions": ["sentiment", "shuffled_sentence_labels"],
+  "seeds": [45, 62],
+  "sentence_split_seed": 20261025,
+  "label_mapping_seed": 908172,
+  "sentences_per_class": {"fit": 33, "validation": 11, "unseen_test": 11},
+  "preprocessing": "raw",
+  "learning_rate": 0.0001,
+  "epochs": 100,
+  "batch_size": 64,
+  "patience": 40,
+  "start_epoch": 10,
+  "deterministic_ops": true,
+  "require_gpu": true
+}
