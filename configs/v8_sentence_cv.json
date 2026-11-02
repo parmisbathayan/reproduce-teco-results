@@ -1,0 +1,11 @@
+{
+  "version": "v8_sentence_cv",
+  "n_folds": 5,
+  "completion_split_seed": 20261102,
+  "test_fold_order": [0, 1, 2, 3, 4],
+  "validation_rule": "next_fold_mod_5",
+  "anchor_rule": "fold_0_test_equals_old_test_and_fold_1_equals_old_validation",
+  "arbitrary_labels": "preserve_original_global_mapping",
+  "balance": "11_per_real_class_and_11_per_arbitrary_class_in_each_22_sentence_fold",
+  "save_weights": false
+}
