@@ -1,0 +1,17 @@
+{
+  "version": "v4_independent_audit",
+  "seeds": [11, 23, 37],
+  "conditions": ["sentiment", "arbitrary_sentence_labels"],
+  "label_mapping_seed": 20261103,
+  "learning_rate": 0.0001,
+  "preprocessing": "raw",
+  "epochs": 100,
+  "batch_size": 64,
+  "patience": 40,
+  "start_epoch": 10,
+  "validation": "next_reader_whole_110_sentences",
+  "checkpoint": "validation_macro_f1",
+  "require_gpu": true,
+  "deterministic_ops": true,
+  "save_weights": false
+}
