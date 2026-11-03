@@ -37,6 +37,9 @@ def validate_config(c):
         'learning_rate':.0001,'preprocessing':'raw','epochs':100,'batch_size':64,
         'patience':40,'start_epoch':10,'validation':'next_reader_whole_110_sentences',
         'checkpoint':'validation_macro_f1','require_gpu':True,'deterministic_ops':True,'save_weights':False}
+    if c.get('version')=='v4_independent_nonzero':
+        expected.update(version='v4_independent_nonzero',exclude_all_zero_trials=True,
+                        validation='next_reader_nonzero_sentences')
     if c!=expected:raise ValueError('Use the fixed independent-audit configuration.')
 
 
@@ -141,7 +144,49 @@ def inputs_for(X,codes,target,job):
     train=np.concatenate([X[codes.index(c)] for c in job['fit_readers']],axis=0)
     validation=X[codes.index(job['validation_reader'])]
     test=X[codes.index(job['test_reader'])]
-    return train,np.tile(target,10),validation,target.copy(),test,target.copy()
+    yf,yv,yt=np.tile(target,10),target.copy(),target.copy()
+    if job.get('exclude_all_zero_trials'):
+        partitions=[]
+        for a,b in [(train,yf),(validation,yv),(test,yt)]:
+            keep=np.any(a!=0,axis=tuple(range(1,a.ndim)))
+            a,b=a[keep],b[keep]
+            if set(map(int,b))!={0,1}:raise ValueError('A nonzero partition lacks one class; stop and review.')
+            partitions.extend([a,b])
+        return tuple(partitions)
+    return train,yf,validation,yv,test,yt
+
+
+def nonzero_jobs(X,y,codes,ids,targets,jobs):
+    """Label-independent reader-specific exclusion, fixed before fitting."""
+    keep=np.any(X!=0,axis=(2,3));reports=[]
+    for i,code in enumerate(codes):
+        for condition,target in targets.items():
+            for label in [0,1]:
+                selected=target==label
+                reports.append({'reader':code,'condition':condition,'label':label,
+                    'retained':int(np.sum(keep[i]&selected)),
+                    'excluded_all_zero':int(np.sum(~keep[i]&selected))})
+    for job in jobs:
+        p=codes.index(job['test_reader']);v=codes.index(job['validation_reader'])
+        job.update(exclude_all_zero_trials=True,test_indices=list(map(int,np.flatnonzero(keep[p]))),
+            n_fit=sum(int(keep[codes.index(c)].sum()) for c in job['fit_readers']),
+            n_validation=int(keep[v].sum()))
+        inputs_for(X,codes,targets[job['condition']],job)  # stop before training if either class is absent
+    return reports,[{'reader':code,'sentence_id':int(sid),'sentiment_label':int(y[j])}
+                    for i,code in enumerate(codes) for j,sid in enumerate(ids) if not keep[i,j]]
+
+
+def feature_quality(X,codes):
+    """Describe supplied feature scale/coverage; do not fit a transform or trim outliers."""
+    rows=[]
+    for i,code in enumerate(codes):
+        a=X[i];values=np.abs(a[a!=0]).astype(np.float64)
+        q=np.quantile(values,[.01,.5,.99,1.]) if len(values) else np.zeros(4)
+        rows.append({'reader':code,'all_zero_trials':int(np.all(a==0,axis=(1,2)).sum()),
+            'nonzero_word_slots':int(np.any(a!=0,axis=2).sum()),
+            'nonzero_value_fraction':float(np.mean(a!=0)),
+            **{name:float(v) for name,v in zip(['abs_nonzero_p01','abs_nonzero_median','abs_nonzero_p99','abs_max'],q)}})
+    return rows
 
 
 def score(truth,probabilities):
@@ -298,7 +343,9 @@ def verify_job(path,job,ids,targets,metadata_hash):
         for name,h in manifest['files'].items():
             if hashlib.sha256(z.read(name)).hexdigest()!=h:raise ValueError('Archive checksum mismatch.')
         rows=csv_rows(z.read('predictions.csv'));history=csv_rows(z.read('history.csv'));metrics=json.loads(z.read('metrics.json'))
-    if len(rows)!=110 or {int(r['sentence_id']) for r in rows}!=set(map(int,ids)):
+    test_indices=job.get('test_indices',list(range(len(ids))))
+    test_ids=np.asarray(ids)[test_indices]
+    if len(rows)!=len(test_ids) or {int(r['sentence_id']) for r in rows}!=set(map(int,test_ids)):
         raise ValueError('Incomplete/duplicate test IDs.')
     expected=dict(zip(map(int,ids),map(int,targets[job['condition']])))
     truth=[];prob=[]
@@ -310,7 +357,7 @@ def verify_job(path,job,ids,targets,metadata_hash):
         truth.append(int(row['true_label']));prob.append(p)
     computed=score(truth,prob)
     if any(abs(float(metrics[k])-v)>1e-12 for k,v in computed.items()):raise ValueError('Saved metric differs from predictions.')
-    if (metrics['n_fit']!=1100 or metrics['n_validation']!=110 or metrics['job']!=job
+    if (metrics['n_fit']!=job.get('n_fit',1100) or metrics['n_validation']!=job.get('n_validation',110) or metrics['job']!=job
             or not history or len(history)!=metrics['stopping_epoch']):raise ValueError('Saved fit/history definition differs.')
     eligible=[h for h in history if int(h['epoch'])>10]
     best=max(eligible,key=lambda h:float(h['val_macro_f1']))
@@ -369,8 +416,8 @@ def collect(root,jobs,ids,targets,metadata_hash,config,require_complete=False):
             if not rr:continue
             summary.append({'condition':condition,'fits':len(rr),
                 'mean_reader_seed_macro_f1':sum(r['macro_f1'] for r in rr)/len(rr),
-                'accuracy':sum(r['correct'] for r in rr)/(110*len(rr)),
-                'correct':sum(r['correct'] for r in rr),'predictions':110*len(rr),
+                'accuracy':sum(r['correct'] for r in rr)/sum(r['n_test'] for r in rr),
+                'correct':sum(r['correct'] for r in rr),'predictions':sum(r['n_test'] for r in rr),
                 'collapses':sum(r['collapsed'] for r in rr)})
         (root/'summary_overall.csv').write_bytes(csv_bytes(summary))
     write_json(root/'completion.json',{'complete':len(done)==72,'verified_fits':len(done),'expected_fits':72})
@@ -415,6 +462,10 @@ def run(args):
     del oldX,oldy,oldcodes,oldids
     targets=targets_for(y,c);jobs=jobs_for(codes,c)
     audits=audit_inputs(X,codes,ids,jobs)
+    quality=feature_quality(X,codes)
+    counts=[];excluded=[]
+    if c.get('exclude_all_zero_trials'):
+        counts,excluded=nonzero_jobs(X,y,codes,ids,targets,jobs)
     architecture=verify_architecture()
     source=[Path(__file__),Path(args.config),Path(__file__).with_name('model.py'),Path(__file__).with_name('data.py')]
     definition={'config':c,'data_files':data_files,'source_files':[{'name':p.name,'sha256':digest(p)} for p in source],
@@ -425,8 +476,18 @@ def run(args):
     else:write_json(metadata,{'created_utc':datetime.now(timezone.utc).isoformat(),'definition':definition})
     plan={'sentence_ids':list(map(int,ids)),'targets':{k:list(map(int,v)) for k,v in targets.items()},'jobs':jobs}
     write_json(root/'split_manifest.json',plan,immutable=True)
+    (root/'feature_quality.csv').write_bytes(csv_bytes(quality))
+    if counts:
+        (root/'retained_class_counts.csv').write_bytes(csv_bytes(counts))
+        write_json(root/'excluded_all_zero_trials.json',excluded,immutable=True)
+        print(f'Excluded {len(excluded)} all-zero reader/sentence inputs from ALL partitions.',flush=True)
+        for row in counts:
+            if row['condition']=='sentiment':print(row,flush=True)
     write_json(root/'preflight.json',{'passed':True,'independent_loader_equals_original':True,
-        'input_shape':list(X.shape),'architecture_checks':architecture,**loader_audit,**audits})
+        'input_shape':list(X.shape),'architecture_checks':architecture,
+        'exclude_all_zero_trials':bool(c.get('exclude_all_zero_trials')),
+        'excluded_trial_count':len(excluded),'retained_class_counts':counts,
+        'feature_quality':quality,**loader_audit,**audits})
     h=digest(metadata);done=collect(root,jobs,ids,targets,h,c,require_complete=args.verify_only)
     mirror_files(root,mirror)
     print(f'Independent V4 preflight passed;{len(done)}/72 fits verified. New seeds11/23/37. Same-sentence identities intentionally shared.',flush=True)
@@ -448,10 +509,16 @@ def run(args):
         val_score=score(yv,model.predict(xv[...,None],verbose=0))
         if abs(val_score['macro_f1']-chosen['best_validation_macro_f1'])>1e-12:
             raise ValueError('Restored weights do not match the selected validation epoch.')
+        test_ids=ids[job['test_indices']] if 'test_indices' in job else ids
         predictions=[{'condition':job['condition'],'seed':job['seed'],'participant':job['test_reader'],
             'sentence_id':int(sid),'true_label':int(t),'predicted_label':int(np.argmax(p)),
-            'probability_negative':float(p[0]),'probability_positive':float(p[1])} for sid,t,p in zip(ids,yt,prob)]
-        metrics={'job':job,'n_fit':1100,'n_validation':110,**sc,**chosen,
+            'probability_negative':float(p[0]),'probability_positive':float(p[1])} for sid,t,p in zip(test_ids,yt,prob)]
+        majority=int(yf.mean()>.5)
+        baseline=score(yt,np.tile(np.eye(2)[majority],(len(yt),1)))
+        metrics={'job':job,'n_fit':len(yf),'n_validation':len(yv),**sc,**chosen,
+            'test_negative':int(np.sum(yt==0)),'test_positive':int(np.sum(yt==1)),
+            'training_majority_test_accuracy':baseline['accuracy'],
+            'training_majority_test_macro_f1':baseline['macro_f1'],
             'selected_train_macro_f1':train_score['macro_f1'],'selected_validation_macro_f1':val_score['macro_f1'],
             'duration_seconds':time.monotonic()-start,'n_parameters':int(model.count_params())}
         save_job(root/'jobs',job,predictions,history,metrics,ids,targets,h)
